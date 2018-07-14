@@ -1,0 +1,1069 @@
+#include <bits/stdc++.h>
+#include "utilities.h"
+#include "neural_net.h"
+
+using namespace std;
+
+int main() {
+  DataSet train_data("data/train.txt");
+  DataSet test_data("data/test.txt");
+  DataSet validation_data("data/validation.txt");
+
+  NeuralNet nn({64, 10, 10});
+  nn.train(train_data, validation_data, test_data, false, 100, 3000);
+  
+  cout << "Final Accuracy: " << nn.test(test_data) << endl;
+  return 0;
+}
+
+#include <bits/stdc++.h>
+#include "utilities.h"
+#include "neural_net.h"
+
+// Argument is an initializer list consisting of sizes of each of the
+// layers in the network
+NeuralNet::NeuralNet(const initializer_list<ll>& lsizes) {
+  this->lsizes = lsizes;
+  this->nlayers = lsizes.size();
+  w.resize(nlayers);
+  b.resize(nlayers);
+  for (ll i = 1; i < nlayers; i++) {
+    // For layer i
+    w[i] = Matrix(this->lsizes[i], this->lsizes[i - 1]);
+    b[i] = Matrix(this->lsizes[i], 1);
+  }
+}
+
+// Trains the network
+void NeuralNet::train(const DataSet& train_data,
+  const DataSet& validation_data, const DataSet& test_data,bool auto_stop, ll batch_size, ll epochs,
+  ld momentum, ld eta, ld eps) {
+  ll dsize = train_data.instances.size();
+  randInitParams();
+
+  // del_c_w[1..nlayers - 1]
+  // del_c_b[i][j][k] is the derivative of c wrt w, where w is the weight of 
+  // the edge connecting neuron k of layer i - 1 to neuron j of layer i
+  //
+  // del_c_b[1..nlayers - 1]
+  // del_c_b[i][j][0] is the derivative of c wrt b, where b is the bias of
+  // neuron j of layer i
+  vector<Matrix> del_c_w(nlayers), del_c_b(nlayers);
+  // For momentum
+  vector<Matrix> v_w(nlayers), v_b(nlayers);
+  // For AdaGrad
+  vector<Matrix> running_del_c_w(nlayers), running_del_c_b(nlayers);
+
+  for (ll i = 1; i < nlayers; i++) {
+    // For layer i
+    del_c_w[i] = Matrix(lsizes[i], lsizes[i - 1]);
+    del_c_b[i] = Matrix(lsizes[i], 1);
+    
+    v_w[i] = Matrix(lsizes[i], lsizes[i - 1]);
+    v_b[i] = Matrix(lsizes[i], 1);
+    
+    running_del_c_w[i] = Matrix(lsizes[i], lsizes[i - 1]);
+    running_del_c_w[i] = {eps};
+    running_del_c_b[i] = Matrix(lsizes[i], 1);
+    running_del_c_b[i] = {eps};
+  }
+
+  bool cont = true;
+  ld curr, prev = 0;
+  for (ll epoch = 0; epoch < epochs && cont; epoch++) {
+    cout << epoch << ",";   
+    // Mini batch gradient descent
+    for (ll i = 0; i < dsize; i += batch_size) {
+      for (ll j = 1; j < nlayers; j++) {
+        del_c_w[j] = {0};
+        del_c_b[j] = {0};
+      }
+      ll lo = i, hi = min(i + batch_size - 1, dsize - 1);
+      
+      // Now the minibatch to consider is train_data[lo..hi]
+      for (ll j = lo; j <= hi; j++) {
+        // z[0..nlayers - 1]
+        // z[i][j][0] is the weighted input to neuron j in layer i
+        vector<Matrix> z = compute_weighted_inputs(train_data.instances[j]);
+
+        // e[1..nlayers - 1]
+        // e[i][j][0] is the error of the neuron j in layer i
+        vector<Matrix> e = compute_errors(z, train_data.target_class[j]);
+
+        // Combine del_c_w, del_c_b for this example with that of previous
+        // ones. This is essentially to compute sigma(del_c_w/b) over all
+        // examples in the minibatch
+        for (ll k = 1; k < nlayers; k++) {
+          del_c_w[k] += e[k] * act_func(z[k - 1]).transpose();
+          del_c_b[k] += e[k];
+        }
+      }
+      
+      // Running sum of squares of gradients required for AdaGrad
+      for (ll j = 1; j < nlayers; j++) {
+        running_del_c_w[j] += 
+          del_c_w[j].apply([](ld x) -> ld {return x * x;}); 
+        running_del_c_b[j] += 
+          del_c_b[j].apply([](ld x) -> ld {return x * x;});
+      }
+      
+      // Gradient descent
+      for (ll j = 1; j < nlayers; j++) {
+        v_w[j] = (momentum * v_w[j]) + 
+          (eta * hadamard_prod(
+          running_del_c_w[j].apply([](ld x) -> ld {return 1 / sqrt(x);}), 
+          (del_c_w[j] / (hi - lo + 1))));
+
+        v_b[j] = (momentum * v_b[j]) + 
+          (eta * hadamard_prod(
+          running_del_c_b[j].apply([](ld x) -> ld {return 1 / sqrt(x);}), 
+          (del_c_b[j] / (hi - lo + 1))));
+
+        w[j] -= v_w[j];
+        b[j] -= v_b[j];
+      }
+    }
+    cout << test(validation_data) << endl;
+    // cout << test(validation_data) << "," << test(train_data) << "\n";
+    if (auto_stop) {
+      curr = test(validation_data);
+      cout << curr << endl;
+      if (curr - prev < -0.5) {
+        cont = false;
+      } else {
+        prev = curr;
+      }
+    }
+  }
+}
+
+// Returns the accuracy of the network on test_data
+ld NeuralNet::test(const DataSet& test_data) {
+  ll dsize = test_data.instances.size();
+  ll t = 0, f = 0;
+  for (ll i = 0; i < dsize; i++) {
+    if (classify(test_data.instances[i]) == test_data.target_class[i]) {
+      ++t;
+    } else {
+      ++f;
+    }
+  }
+  return static_cast<ld>(t * 100) / (t + f);
+}
+
+// Classifes a given instance by feedforwarding
+ll NeuralNet::classify(const Matrix& instance) {
+  vector<Matrix> output;
+  output = compute_weighted_inputs(instance, true);
+  output[0] = act_func(output[0]);
+  ll out_size = lsizes[nlayers - 1], max_idx = 0;
+  for (ll i = 0; i < out_size; i++) {
+    if (output[0][i][0] > output[0][max_idx][0]) {
+      max_idx = i;
+    }
+  }
+  return max_idx;
+}
+
+// Compute the weighted inputs by feed forwarding
+vector<Matrix> NeuralNet::compute_weighted_inputs(
+  const Matrix& instance, bool only_output) {
+  
+  // Assume instance to be a column matrix
+  vector<Matrix> z;
+  
+  // For layer 0
+  Matrix z_layer = instance;
+  if (!only_output) {
+    z.push_back(z_layer);
+  }
+
+  // For layer 1
+  z_layer = w[1] * z_layer + b[1];
+  if (!only_output) {
+    z.push_back(z_layer);
+  }
+  
+  // For other layers
+  for (ll i = 2; i < nlayers; i++) {
+    // Compute weighted input for layer i
+    z_layer = w[i] * act_func(z_layer) + b[i];
+    if (!only_output || i == nlayers - 1) {
+      z.push_back(z_layer);
+    }
+  }
+  return z;
+}
+
+// Compute the errors using backpropagation
+vector<Matrix> NeuralNet::compute_errors(vector<Matrix>& z,
+  short target_class) {
+  vector<Matrix> e(nlayers);
+
+  // Fill output layer errors
+  Matrix target_vect(lsizes[nlayers - 1], 1);
+  target_vect = {0};
+  target_vect[target_class][0] = 1;
+  e[nlayers - 1] = act_func(z[nlayers - 1]) - target_vect;
+
+  // Backpropagate the errors
+  for (ll i = nlayers - 2; i > 0; i--) {
+    e[i] = hadamard_prod(w[i + 1].transpose() * e[i + 1], sigmoid_prime(z[i]));
+  }
+  return e;
+}
+
+// Returns the logistic sigmoid of x
+ld NeuralNet::sigmoid(ld x) {
+  return exp(x) / (1 + exp(x));
+}
+
+// Returns the value of sigmoid derivative applied on x
+ld NeuralNet::sigmoid_prime(ld x) {
+  return sigmoid(x) * (1 - sigmoid(x));
+}
+
+// Vectorized form of sigmoid_prime
+Matrix NeuralNet::sigmoid_prime(Matrix& m) {
+  ll r = m.getNumRows(), c = m.getNumCols();
+  Matrix res(r, c);
+  for (ll i = 0; i < r; i++) {
+    for (ll j = 0; j < c; j++) {
+      res[i][j] = sigmoid_prime(m[i][j]);
+    }
+  }
+  return res;
+}
+
+// Activation function
+Matrix NeuralNet::act_func(Matrix& m) {
+  Matrix res = m;
+  ll c = m.getNumCols(), r = m.getNumRows();
+  for (ll i = 0; i < r; i++) {
+    for (ll j = 0; j < c; j++) {
+      res[i][j] = sigmoid(m[i][j]);
+    }
+  }
+  return res;
+}
+
+// Randomly initializes the weights and biases with -1 to 1
+void NeuralNet::randInitParams() {
+  default_random_engine gen;
+  uniform_real_distribution<double> dist(-1.0, 1.0);
+  for (ll i = 1; i < nlayers; i++) {
+    for (ll j = 0; j < lsizes[i]; j++) {
+      for (ll k = 0; k < lsizes[i - 1]; k++) {
+        w[i][j][k] = dist(gen);
+      }
+    }
+  }
+  for (ll i = 1; i < nlayers; i++) {
+    for (ll j = 0; j < lsizes[i]; j++) {
+      b[i][j][0] = dist(gen);
+    }
+  }
+}
+
+#include <bits/stdc++.h>
+#include "utilities.h"
+
+using namespace std;
+
+// Default constructor
+Matrix::Matrix() {
+  data.resize(1);
+  data[0].resize(1);
+  nrows = 1; ncols = 1;
+}
+
+// Constructs a matrix with dimensions ('nrows', 'ncols')
+Matrix::Matrix(ll nrows, ll ncols) {
+  if (nrows == 0 || ncols == 0) {
+    cerr << "Trying to create matrix of dimension (" << nrows << ", " << ncols;
+    cerr << "): Neither dimension is allowed be of size 0\n";
+    exit(0);
+  }
+  data.resize(nrows);
+  for (ll i = 0; i < nrows; i++) {
+    data[i].resize(ncols, 0);
+  }
+  this->nrows = nrows;
+  this->ncols = ncols;
+}
+
+// Copy constructor
+Matrix::Matrix(const Matrix& m) {
+  data = m.data;
+  nrows = m.nrows;
+  ncols = m.ncols;
+}
+
+// Allows access to individual elements
+vector<ld>& Matrix::operator[](ll row) {
+  return data[row];
+}
+
+// Assigns the matrix from another
+Matrix& Matrix::operator=(const Matrix& m) {
+  data = m.data;
+  nrows = m.nrows;
+  ncols = m.ncols;
+  return *this;
+}
+
+// Allows assignments of the form m = {1, 2, 3, 4}
+Matrix& Matrix::operator=(const initializer_list<ld>& l) {
+  if (l.size() == 0) {
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = 0;
+      }
+    }
+  } else if (l.size() == 1) {
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = *l.begin();
+      }
+    }
+  } else if (nrows * ncols != static_cast<ll>(l.size())) {
+    cerr << "Dimension mismatch: " << nrows * ncols << " != " << l.size() << "\n";
+    exit(0);
+  } else {
+    initializer_list<ld>::iterator it = l.begin();
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = *(it++);
+      }
+    }
+  }
+  return *this;
+}
+
+// Addition assignment with a matrix 
+Matrix& Matrix::operator+=(const Matrix& m) {
+  *this = *this + m;
+  return *this;
+}
+
+// Subtraction assignment with a matrix 
+Matrix& Matrix::operator-=(const Matrix& m) {
+  *this = *this - m;
+  return *this;
+}
+
+// Multiplication assignment with a matrix 
+Matrix& Matrix::operator*=(const Matrix& m) {
+  *this = *this * m;
+  return *this;
+}
+
+// Multiplication assignment with a number 
+Matrix& Matrix::operator*=(ld a) {
+  *this = *this * a;
+  return *this;
+}
+
+// Division assignment with a number
+Matrix& Matrix::operator/=(ld a) {
+  *this = *this / a;
+  return *this;
+}
+
+// Compute norm of the row or column matrix
+ld Matrix::norm() {
+  if (nrows > 1 && ncols > 1) {
+    cerr << "Dimension error (" << nrows << ", " << ncols << "): ";
+    cerr << "norm() can be computed only on a row or column matrix\n";
+    exit(0);
+  }
+  ld ans = 0;
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      ans += data[i][j] * data[i][j];
+    }
+  }
+  return sqrt(ans);
+}
+  
+// Returns transpose of the matrix
+Matrix Matrix::transpose() {
+  Matrix ans(ncols, nrows);
+    for (ll i = 0; i < ans.nrows; i++) {
+      for (ll j = 0; j < ans.ncols; j++) {
+        ans.data[i][j] = data[j][i];
+      }
+    }
+    return ans;
+}
+
+// Returns a matrix containing column means
+Matrix Matrix::mean() {
+  ld sum;
+  Matrix ans(1, ncols);
+  for (ll j = 0; j < ans.ncols; j++) {
+  sum = 0;
+    for (ll i = 0; i < nrows; i++) {
+      sum += data[i][j];
+    }
+    ans.data[0][j] = sum/nrows;
+  }
+  return ans;
+}
+
+// Sets all elements to 1
+Matrix Matrix::initializer() {
+  Matrix ans(nrows, ncols);
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      data[i][j]  = 1;
+    }
+  }
+  return ans;
+}
+
+// Returns the determinant of the matrix
+ld Matrix::determinant() {
+  if (nrows != ncols) {
+    cerr << "Dimension error (" << nrows << ", " << ncols << "): ";
+    cerr << "Determinant can be computed only for a square matrix";
+    exit(0);
+  }
+  vector<bool> row_mask(nrows, true), col_mask(nrows, true);
+  return determinant(row_mask, col_mask);
+}
+
+// Returns the inverse of the matrix
+Matrix Matrix::inverse() {
+  vector<bool> row_mask(nrows, true), col_mask(nrows, true);
+  ld det = this->determinant(row_mask, col_mask);
+  if (nrows != ncols) {
+    cerr << "Dimension error (" << nrows << ", " << ncols << "): ";
+    cerr << "Inverse can be computed only for a square matrix";
+    exit(0);
+  } else if (det == 0) {
+    cerr << "Error: Matrix is non-invertible (determinant is 0)\n";
+    exit(0);
+  }
+
+  Matrix ans(nrows, nrows);
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      // find cofactor of (j, i)
+      row_mask[j] = false; col_mask[i] = false;
+      ans.data[i][j] = ((i + j) % 2 ? -1 : 1) * determinant(row_mask, col_mask);
+      row_mask[j] = true; col_mask[i] = true;
+    }
+  }
+  return ans / det;
+}
+
+Matrix Matrix::apply(ld (*func)(ld), bool in_place) {
+  if (in_place) {
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = func(data[i][j]);
+      }
+    }
+    return *this;
+  } else {
+    Matrix res = *this;
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        res.data[i][j] = func(res.data[i][j]);
+      }
+    }
+    return res;
+  }
+}
+
+// Append a row before row with index 'before' and set all its elements
+// to 'fill_val'
+void Matrix::addRow(ll before, ll fill_val) {
+  if (before == -1) {
+    data.insert(data.end(), vector<ld>(ncols, fill_val));
+  } else {
+    data.insert(data.begin() + before, vector<ld>(ncols, fill_val));
+  }
+  ++nrows;
+}
+
+// Returns the number of rows
+ll Matrix::getNumRows() const {
+  return nrows;
+}
+
+// Returns the number of columns
+ll Matrix::getNumCols() const {
+  return ncols;
+}
+
+Matrix hadamard_prod(const Matrix& m1, const Matrix& m2) {
+  if (m1.nrows != m2.nrows || m1.ncols != m2.ncols) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") hadamard product with";
+    cerr << " (" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix res(m1.nrows, m1.ncols);
+  for (ll i = 0; i < res.nrows; i++) {
+    for (ll j = 0; j < res.ncols; j++) {
+      res.data[i][j] = m1.data[i][j] * m2.data[i][j];
+    }
+  }
+  return res;
+}
+
+// Returns a matrix representing the sum of two matrices
+Matrix operator+(const Matrix& m1, const Matrix& m2) {
+  if (m1.nrows != m2.nrows || m1.ncols != m2.ncols) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") + ";
+    cerr << "(" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix ans(m1.nrows, m1.ncols);
+  for (ll i = 0; i < ans.nrows; i++) {
+    for (ll j = 0; j < ans.ncols; j++) {
+      ans.data[i][j] = m1.data[i][j] + m2.data[i][j];
+    }
+  }
+  return ans;
+}
+
+// Returns a matrix representing the difference of two matrices
+Matrix operator-(const Matrix& m1, const Matrix& m2) {
+  if (m1.nrows != m2.nrows || m1.ncols != m2.ncols) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") + ";
+    cerr << "(" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix ans(m1.nrows, m1.ncols);
+  for (ll i = 0; i < ans.nrows; i++) {
+    for (ll j = 0; j < ans.ncols; j++) {
+      ans.data[i][j] = m1.data[i][j] - m2.data[i][j];
+    }
+  }
+  return ans;
+}
+
+// Returns a matrix representing the product of two matrices
+Matrix operator*(const Matrix& m1, const Matrix& m2) {
+  if (m1.ncols != m2.nrows) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") * ";
+    cerr << "(" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix ans(m1.nrows, m2.ncols);
+  for (ll i = 0; i < ans.nrows; i++) {
+    for (ll j = 0; j < ans.ncols; j++) {
+      ans.data[i][j] = 0;
+      for (ll k = 0; k < m1.ncols; k++) {
+        ans.data[i][j] += m1.data[i][k] * m2.data[k][j];
+      }
+    }
+  }
+  return ans;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+// and the matrix
+ld operator+(const Matrix& m, ld num) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'matrix' + 'number' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return m.data[0][0] + num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+// and the matrix
+ld operator+(ld num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' + 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return num + m.data[0][0];
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+// and the matrix
+ld operator-(const Matrix& m, ld num) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'matrix' - 'number' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return m.data[0][0] - num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+// and the matrix
+ld operator-(ld num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' - 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return num - m.data[0][0];
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+// and the matrix
+ld& operator+=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' += 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num += m.data[0][0];
+  return num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the difference of the
+// number and the matrix
+ld& operator-=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' -= 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num -= m.data[0][0];
+  return num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the product of the
+// number and the matrix
+ld& operator*=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' *= 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num *= m.data[0][0];
+  return num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the division of the
+// number and the matrix
+ld& operator/=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' /= 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num /= m.data[0][0];
+  return num;
+}
+
+// Returns a matrix which is the scalar multiplication of 'm' with 'num'
+Matrix operator*(const Matrix& m, ld num) {
+  Matrix ans(m);
+  ans.element_wise_multiply(num);
+  return ans;
+}
+
+// Returns a matrix which is the scalar multiplication of 'm' with 'num'
+Matrix operator*(ld num, const Matrix& m) {
+  Matrix ans(m);
+  ans.element_wise_multiply(num);
+  return ans;
+}
+
+// Returns a matrix which is the division of 'm' with 'num'
+Matrix operator/(const Matrix& m, ld num) {
+  Matrix ans(m);
+  ans.element_wise_divide(num);
+  return ans;
+}
+
+// Used to print the matrix
+std::ostream& operator<<(std::ostream& out, const Matrix& m) {
+  for (ll i = 0; i < m.nrows; i++) {
+    for (ll j = 0; j < m.ncols; j++) {
+      out << m.data[i][j] << " ";
+    }
+    out << "\n";
+  }
+  return out;
+}
+
+// Computes the elements of the submatrix defined by 'row_mask' and 
+// 'col_mask'
+ld Matrix::determinant(vector<bool>& row_mask, vector<bool>& col_mask) {
+  ll r = 0, c = 0, nr = 0, nc = 0;
+  for (size_t i = 0; i < row_mask.size(); i++) {
+    if (row_mask[i]) {
+      r = i;
+      ++nr;
+    } 
+  }
+  for (size_t i = 0; i < col_mask.size(); i++) {
+    if (col_mask[i]) {
+      c = i;
+      ++nc;
+    } 
+  }
+
+  if (nr == 0 || nc == 0) {
+    return 1;
+  } else if (nr == 1 && nc == 1) {
+    return data[r][c];
+  } else {
+    ll r = 0;
+    while (!row_mask[r++]);
+    --r;
+    row_mask[r] = false;
+
+    int sign = 1;
+    ld ans = 0;
+    for (ll i = 0; i < ncols; i++) {
+      if (col_mask[i]) {
+        col_mask[i] = false;
+        ans += sign * data[r][i] * determinant(row_mask, col_mask);
+        sign *= -1;
+        col_mask[i] = true;
+      }
+    }
+    row_mask[r] = true;
+    return ans;
+  }
+}
+
+// Multiplies each element of the matrix with 'num'
+void Matrix::element_wise_multiply(ld num) {
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      data[i][j] *= num;
+    }
+  }
+}
+
+// Divides each element of the matrix with 'num'
+void Matrix::element_wise_divide(ld num) {
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      data[i][j] /= num;
+    }
+  }
+}
+
+// 'file' is the path to the file from where the dataset
+// needs to be fetched
+DataSet::DataSet(const string& file) {
+  int isizecol = 64, row = 0, col;
+  ld i;
+  string line;
+  ifstream myfile (file);
+  if (myfile.is_open()) {
+    while (getline (myfile,line)) {
+      instances.push_back(Matrix(isizecol, 1));
+      std::stringstream ss(line);
+      col = 0;
+      while (ss >> i) {
+        if (col < isizecol) {
+          instances[row][col][0] = i;
+        } else {
+          target_class.push_back(i);
+          break;
+        }
+        if (ss.peek() == ',' ) {
+          ss.ignore();
+          col++;
+        }
+      }
+      row++;
+    }
+    myfile.close();
+  } else {
+    cerr << "Can't open file\n"; 
+    exit(0);
+  }
+}
+
+// Prints the dataset
+void DataSet::print() {
+  for (size_t i = 0; i < instances.size(); i++) {
+    for (ll j = 0; j < instances[i].getNumRows(); j++) {
+      cout << instances[i][j][0] << ",";
+    }
+    cout << target_class[i] << "\n";
+  }
+}
+
+// 'tp', 'tn', 'fp', 'fn' represents the number of true positives,
+// true negatives, false positives, false negatives respectively 
+Stats::Stats(ll tp, ll tn, ll fp, ll fn) {
+  this->tp = tp; this->tn = tn;
+  this->fp = fp; this->fn = fn;
+  f_measure = static_cast<ld>(2 * tp) / (2 * tp + fp + fn); 
+  accuracy = static_cast<ld>(tp + tn) / (tp + tn + fp + fn);
+  precision = static_cast<ld>(tp) / (tp + fp);
+  recall = static_cast<ld>(tp) / (tp + fn);
+}
+
+// Prints the statistics
+ostream& operator<<(ostream& out, const Stats& s) {
+  out << "Accuracy: " << s.accuracy << "\n";
+  out << "Recall: " << s.recall << "\n";
+  out << "Precision: " << s.precision << "\n\n";
+  // out << "F Measure: " << s.f_measure << "\n\n";
+  out << "Confusion Matrix\n";
+  out << s.tn << " " << s.fp << "\n" << s.fn << " " << s.tp << "\n";
+  return out;
+}
+
+#ifndef NEURAL_NET_H_
+#define NEURAL_NET_H_
+
+#include <bits/stdc++.h>
+#include "utilities.h"
+
+using namespace std;
+
+class NeuralNet {
+public:
+  // Argument is an initializer list consisting of sizes of each of the
+  // layers in the network
+  NeuralNet(const initializer_list<ll>& lsizes);
+
+  // Trains the network
+  void train(const DataSet& train_data, const DataSet& validation_data,
+    const DataSet& test_data, bool auto_stop = false, ll batch_size = 100, 
+    ll epochs = 3000, ld momentum = 0.8, ld eta = 1.2, ld eps = 1e-8);
+  
+  // Returns the accuracy of the network on test_data
+  ld test(const DataSet& test_data);
+
+private:
+  // Classifes a given instance by feedforwarding
+  ll classify(const Matrix& instance);
+
+  // Compute the weighted inputs by feed forwarding
+  vector<Matrix> compute_weighted_inputs(
+    const Matrix& instance, bool only_output = false);
+
+  // Compute the errors using backpropagation
+  vector<Matrix> compute_errors(vector<Matrix>& e,
+    short target_class);
+
+  // Returns the logistic sigmoid of x
+  ld sigmoid(ld x);
+
+  // Returns the value of sigmoid derivative applied on x
+  ld sigmoid_prime(ld x);
+
+  // Vectorized form of sigmoid_prime
+  Matrix sigmoid_prime(Matrix& m);
+
+  // Activation function
+  Matrix act_func(Matrix& m);
+
+  // Randomly initializes the weights and biases with -1 to 1
+  void randInitParams();
+
+  // Layers are numbered from 0 to nlayers - 1
+
+  // w[i][j][k] is the weight of the edge from node k in layer i - 1 to node
+  // j in layer i
+  // w[i] is of size (lsizes[i], lsizes[i - 1])
+  // w is of size (nlayers - 1)
+  vector<Matrix> w;
+
+  // lsizes[i] is the number of neurons in layer i
+  vector<ll> lsizes;
+
+  // b[i][j][0] is the bias of the neuron j in layer i
+  // b[i] is of size (lsizes[i], 1)
+  // Size of b is (nlayers - 1)
+  vector<Matrix> b;
+
+  // Number of layers
+  ll nlayers;
+};
+
+#endif
+
+#ifndef UTILITIES_H_
+#define UTILITIES_H_
+
+#include <bits/stdc++.h>
+
+using namespace std;
+
+typedef double ld;
+typedef long long ll;
+
+class Matrix {
+public:
+  // Default constructor
+  Matrix();
+
+  // Constructs a matrix with dimensions ('nrows', 'ncols')
+  Matrix(ll nrows, ll ncols);
+
+  // Copy constructor
+  Matrix(const Matrix& m);
+
+  // Allows access to individual elements
+  vector<ld>& operator[](ll row);
+
+  // Assigns the matrix from another
+  Matrix& operator=(const Matrix& m);
+
+  // Allows assignments of the form m = {1, 2, 3, 4}
+  Matrix& operator=(const initializer_list<ld>& l);
+
+  // Addition assignment with a matrix 
+  Matrix& operator+=(const Matrix& m);
+
+  // Subtraction assignment with a matrix 
+  Matrix& operator-=(const Matrix& m);
+  
+  // Multiplication assignment with a matrix 
+  Matrix& operator*=(const Matrix& m);
+  
+  // Multiplication assignment with a number 
+  Matrix& operator*=(ld a);
+  
+  // Division assignment with a number
+  Matrix& operator/=(ld a);
+
+  // Compute norm of the row or column matrix
+  ld norm();
+
+  // Returns transpose of the matrix
+  Matrix transpose();
+
+
+  // Returns a matrix containing column means
+  Matrix mean();
+  
+  // Sets all elements to 1
+  Matrix initializer();
+
+  // Returns the determinant of the matrix
+  ld determinant();
+
+  // Returns the inverse of the matrix
+  Matrix inverse();
+
+  Matrix apply(ld (*func)(ld), bool in_place = false);
+  
+  // Append a row before row with index 'before' and set all its elements
+  // to 'fill_val'
+  void addRow(ll before, ll fill_val);
+
+  // Returns the number of rows
+  ll getNumRows() const;
+
+  // Returns the number of columns
+  ll getNumCols() const;
+
+  friend Matrix hadamard_prod(const Matrix& m1, const Matrix& m2);
+  
+  // Returns a matrix representing the sum of two matrices
+  friend Matrix operator+(const Matrix& m1, const Matrix& m2);
+
+  // Returns a matrix representing the difference of two matrices
+  friend Matrix operator-(const Matrix& m1, const Matrix& m2);
+
+  // Returns a matrix representing the product of two matrices
+  friend Matrix operator*(const Matrix& m1, const Matrix& m2);
+
+  // Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+  // and the matrix
+  friend ld operator+(const Matrix& m, ld num);
+
+  // Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+  // and the matrix
+  friend ld operator+(ld num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+  // and the matrix
+  friend ld operator-(const Matrix& m, ld num);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+  // and the matrix
+  friend ld operator-(ld num, const Matrix& m);
+
+  // Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+  // and the matrix
+  friend ld& operator+=(ld& num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the difference of the
+  // number and the matrix
+  friend ld& operator-=(ld& num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the product of the
+  // number and the matrix
+  friend ld& operator*=(ld& num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the division of the
+  // number and the matrix
+  friend ld& operator/=(ld& num, const Matrix& m);
+  
+
+  // Returns a matrix which is the scalar multiplication of 'm' with 'num'
+  friend Matrix operator*(const Matrix& m, ld num);
+
+  // Returns a matrix which is the scalar multiplication of 'm' with 'num'
+  friend Matrix operator*(ld num, const Matrix& m);
+  
+  // Returns a matrix which is the division of 'm' with 'num'
+  friend Matrix operator/(const Matrix& m, ld num);
+
+  // Used to print the matrix
+  friend ostream& operator<<(ostream &out, const Matrix& m);
+
+private:
+  // Computes the elements of the submatrix defined by 'row_mask' and 
+  // 'col_mask'
+  ld determinant(vector<bool>& row_mask, vector<bool>& col_mask);
+  
+  // Multiplies each element of the matrix with 'num'
+  void element_wise_multiply(ld num);
+
+  // Divides each element of the matrix with 'num'
+  void element_wise_divide(ld num);
+  
+  // Stores the elements of the matrix
+  vector<vector<ld>> data;
+  ll nrows;
+  ll ncols;
+};
+
+class DataSet {
+public:
+  // 'file' is the path to the file from where the dataset
+  // needs to be fetched
+  DataSet(const string& file);
+  
+  // Prints the dataset
+  void print();
+
+  // Stores the instances of dataset in a column matrix
+  vector<Matrix> instances;
+
+  // Stores the target class corresponding to each instance
+  vector<short> target_class;
+};
+
+class Stats {
+public:
+  // 'tp', 'tn', 'fp', 'fn' represents the number of true positives,
+  // true negatives, false positives, false negatives respectively 
+  Stats(ll tp, ll tn, ll fp, ll fn);
+
+  // Prints the statistics
+  friend ostream& operator<<(ostream& out, const Stats& s);
+private:
+  ll tp, tn, fp, fn;
+  ld precision, recall, accuracy, f_measure;
+};
+
+#endif

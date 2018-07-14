@@ -1,0 +1,1309 @@
+// classifiers.cpp
+#include <bits/stdc++.h>
+#include "classifiers.h"
+#include "utilities.h"
+
+using namespace std;
+
+typedef long double ld;
+typedef long long ll;
+
+// Tests a classifier on the dataset 'd'
+Stats Classifier::test(const DataSet& d) {
+  ll tp = 0, tn = 0, fp = 0, fn = 0;
+  ll dsize = d.instances.size();
+  for (ll i = 0; i < dsize; i++) {
+    bool c = classify(d.instances[i]);
+
+    // Compute the number of true positives, true negatives, false positives
+    // and false negatives
+    if (c == d.target_class[i]) {
+      if (c) {
+        ++tp;
+      } else {
+        ++tn;
+      }
+    } else {
+      if (c) {
+        ++fp;
+      } else {
+        ++fn;
+      }
+    }
+  }
+  Stats ans(tp, tn, fp, fn);
+  return ans;
+}
+
+// Returns the sigmoid of 'x'
+ld Classifier::sigmoid(ld x) {
+  return 1 / (1 + exp(-x));
+}
+
+/*************************************************************************************/
+DiscriminantClassifier::DiscriminantClassifier() {
+  N = 4;
+}
+
+void DiscriminantClassifier::run() {
+  long long isizerow = 960, isizecol = 4, row = 0, col = 0;
+  long double i, j, k, key1, key2, max;
+  int noof1 = 0, position = 0;
+  Matrix a(isizerow, isizecol);
+  //Reading Data From file and filling 
+  //data to "a" matrix and pushing corresponding class to "gresult" vector.
+
+  std::vector<long double> gresult;
+  string line;
+  ifstream myfile ("data/train.txt");
+  if (myfile.is_open())
+  {
+    while ( getline (myfile,line) )
+    {
+      std::stringstream ss(line);
+      col = 0;
+      while (ss >> i)
+      {
+          if(col < isizecol)
+          {
+            a[row][col] = i;
+          }else
+            {
+              gresult.push_back(i);
+              break;
+            }
+
+          if (ss.peek() == ',' )
+          {
+              ss.ignore();
+              col++;
+          }
+      }
+    row++;
+    }
+  myfile.close();
+  }else cout << "Unable to open file"; 
+
+
+  //Counting number of elements in each class
+  int c1 = 0, c2;
+  for(i = 0; i < isizerow; i++)
+  {
+    if(gresult.at(i) == 1)
+    {
+      c1++;
+    }
+  }
+  c2 = isizerow - c1;
+
+  Matrix b(c1, isizecol), c(isizerow - c1, isizecol);
+
+  //Differentiating both classes to different matrixes "b" & "c"
+  int rowb = 0, rowc = 0;
+  for (i=0; i< isizerow; i++)
+  {
+    if(gresult.at(i) == 0)
+    {
+      for (j=0; j< isizecol; j++)
+      {
+        c[rowc][j] = a[i][j]; 
+      }
+      rowc++;
+    }else
+    {
+      for (j=0; j< isizecol; j++)
+      {
+        b[rowb][j] = a[i][j]; 
+      }
+      rowb++;
+    }
+  }
+
+  Matrix sw(isizecol,isizecol);
+  Matrix identityb(c1, c1);
+  Matrix identityc(c2, c2);
+
+  //identity matrices for further calculations
+
+  identityb.initializer();
+  identityc.initializer();
+
+  Matrix tempb(c1, isizecol);
+  Matrix tempc(c2, isizecol);
+  tempb = (b - ((identityb*b)/c1));
+  tempc = (c - ((identityc*c)/c2));
+
+  //Calculating within class co-varience and adding them
+  sw =  ((tempb.transpose())*tempb) + ((tempc.transpose())*tempc);
+
+  Matrix inversesw(isizecol, isizecol);
+
+  inversesw = sw.inverse(); 
+
+  Matrix finalcorrec(1,4);
+
+  //Final Projection vector "finalcorrec" is calculated
+
+  finalcorrec = (inversesw*((b.mean() - c.mean()).transpose()));
+
+  Matrix temp(1, isizecol), projectedvalue(1,1), conclu(isizerow, 2);
+
+  //filling projected values(Sw * training vectors) and there 
+  //corresponding classes to conclu
+  for(i = 0; i < isizerow; i++)
+  {
+      for(j = 0; j < 4; j++)
+      {
+        temp[0][j] = a[i][j];
+      }
+      projectedvalue =  temp*finalcorrec;
+
+      conclu[i][0] = projectedvalue[0][0];
+      conclu[i][1] = gresult.at(i);     
+  }
+
+  //Sorting projected vectors with respect to projected 1-D value 
+  //with corresponding class information also
+  for (i = 1; i < isizerow; i++)
+  {
+      key1 = conclu[i][0];
+      key2 = conclu[i][1];
+      j = i-1;
+
+     while (j >= 0 && conclu[j][0] > key1)
+     {
+         conclu[j+1][0] = conclu[j][0];
+         conclu[j+1][1] = conclu[j][1];
+         j = j-1;
+     }
+     conclu[j+1][0] = key1;
+     conclu[j+1][1] = key2;
+  }
+
+  std::vector<long double> threshold;
+
+  //find mean of all consecutive projected values for entropy calculation
+  for(i = 0; i < isizerow-1; i++)
+  {
+    threshold.push_back((conclu[i][0] + conclu[i+1][0])/2);
+  }
+
+  //Finding total no of members of each class
+  for(i = 0; i < isizerow; i++)
+  {
+    if(conclu[i][1] == 1)
+    {
+      noof1++;
+    }
+  }
+
+  std::vector<long double> entropyval;
+
+  //Pushing entropy Values to "entropyval" vector
+  for(i = 0; i < isizerow-1; i++)
+  {
+    j = 0;
+    while(conclu[j][0] < threshold[i])
+    {
+      j++;
+    }
+
+    int count = 0;
+
+    for(k = 0; k < j; k++)
+    {
+      if(conclu[k][1] == 1)
+      {
+        count++;
+      }
+    }
+    entropyval.push_back(entropy(noof1, isizerow, j,count));
+  }
+
+  //Finding Maximum Entropy and corresponding threshold value
+  max = entropyval[0];
+  for(i = 0; i < isizerow-1; i++)
+  {
+    if(max < entropyval.at(i))
+    {
+      max = entropyval.at(i);
+      position = i;
+    }
+  }
+  // cout <<"Max Entropy" <<  max << endl;
+  max = 0;
+  ld finalthresh = threshold.at(position);
+
+  // cout << "threshhold: " <<finalthresh<< endl;
+
+  //Calculating total no of elements in predicted classes
+  for(i = 0; i < isizerow; i++)
+  {
+    if(conclu[i][0] < finalthresh)
+    {
+      max++;
+    }
+  }
+
+  //***TESTING STARTS***
+  //Reading data and filling to"d" matrix
+  isizerow = 412; row = 0; col = 0; isizecol = 4; 
+  std::vector<ld> testans;;
+  Matrix d(isizerow, isizecol);
+  ifstream newfile ("data/test.txt");
+  if (newfile.is_open())
+  {
+    while ( getline (newfile,line) )
+    {
+      std::stringstream ss(line);
+      col = 0;
+      while (ss >> i)
+      {
+          if(col < isizecol)
+          {
+            d[row][col] = i;
+          }else
+            {
+              testans.push_back(i);
+              break;
+            }
+
+          if (ss.peek() == ',' )
+          {
+              ss.ignore();
+              col++;
+          }
+      }
+    row++;
+    }
+  newfile.close();
+  }else {cout << "Unable to open file";exit(0);}
+
+  //Finding total no elements in each class
+  int good = 0;
+  for(i = 0; i < 412; i++)
+  {
+    if (testans[i] == 1)
+    {
+      good++;      }
+  }
+
+  Matrix conclufin(isizerow, 2);
+
+  //Filling projected Vlaues with corresponding classes to a "conclufin"
+  //matrix
+  for(i = 0; i < isizerow; i++)
+  {
+      for(j = 0; j < 4; j++)
+      {
+        temp[0][j] = d[i][j];
+      }
+      projectedvalue =  temp*finalcorrec;
+
+      conclufin[i][0] = projectedvalue[0][0];
+      conclufin[i][1] = testans.at(i);     
+  }
+
+  //Finding numbers of correctly classified and misclassified
+
+  ld a1 = 0, b0 = 0, a0 = 0, b1 = 0;
+  for(i = 0; i < isizerow; i++)
+  {
+    if(conclufin[i][0] < finalthresh && conclufin[i][1] != 0)
+    {
+      a1++;
+    }else if(conclufin[i][0] < finalthresh){
+      a0++;
+    }
+
+    if(conclufin[i][0] > finalthresh && conclufin[i][1] != 1  )
+    {
+      b0++;
+    }else if(conclufin[i][0] > finalthresh){
+      b1++;
+    }
+  }
+
+
+  ld accuracy = (a0 + b1)/412;
+  ld recall = (b1)/good;
+  ld precision = b1/(b0 + b1);
+
+  cout << "Accuracy: " << accuracy<<endl;
+  cout << "Recall: "<< recall <<endl;
+  cout << "Precision: " << precision << endl << endl;
+  
+  cout << "Confusion Matrix"<< endl;
+
+  cout << a0 <<"  "<<b0 <<endl;
+  cout << a1 << " "<< b1 << endl;
+}
+
+bool DiscriminantClassifier::classify(const Matrix& instance) {
+  return true;
+}
+
+long double DiscriminantClassifier::loga(long double d)
+{
+    if(d == 0)
+      return 0;
+    return log(d);
+}
+
+ld DiscriminantClassifier::entropy(ld noof1, ld isizerow, ld position, ld count)
+{
+  ld a, b, c, d;
+  a = count/position;
+  b = 1-a;
+  c = (noof1-count)/(isizerow-position);
+  d = (1-c);
+  return (a * loga(a) + b*loga(b) + c * loga(c) + d*loga(d));
+}
+
+/*************************************************************************************/
+
+// Trains the classifier using the dataset 'd'. Computes 'w_transpose' and
+// 'w0'
+void ProbabilisticGenerativeClassifier::train(const DataSet& d) {
+  // Compute mu1 and mu2
+  ll n = d.instances.size(), num_features = d.instances[0].getNumRows();
+  ll n1 = d.num_pos_examples, n2 = d.num_neg_examples;
+  
+  // Compute mu1 and mu2
+  Matrix mu1(num_features, 1), mu2(num_features, 1);
+  mu1 = {}; mu2 = {};
+  for (ll i = 0; i < n; i++) {
+    mu1 += d.target_class[i] * d.instances[i];
+    mu2 += (1 - d.target_class[i]) * d.instances[i];
+  }
+  mu1 /= n1; mu2 /= n2;
+
+  // Compute s
+  Matrix s(num_features, num_features);
+  s = {};
+  for (ll i = 0; i < n; i++) {
+    if (d.target_class[i]) {
+      Matrix temp = d.instances[i] - mu1;
+      s += temp * temp.transpose();
+    } else {
+      Matrix temp = d.instances[i] - mu2;
+      s += temp * temp.transpose();
+    }
+  }
+  s /= n;
+  Matrix s_inv = s.inverse();
+
+  // Compute w_transpose and w0
+  w_transpose = (s_inv * (mu1 - mu2)).transpose();
+  w0 = 0;
+  w0 += -0.5 * mu1.transpose() * s_inv * mu1; 
+  w0 += 0.5 * mu2.transpose() * s_inv * mu2; 
+  w0 += log((static_cast<ld>(n1) / n) / (static_cast<ld>(n2) / n));
+}
+
+// Classify the instance given by 'instance' using the classifier
+// This is used by 'test'
+bool ProbabilisticGenerativeClassifier::classify(const Matrix& instance) {
+  return sigmoid(w_transpose * instance + w0) >= 0.5;
+}
+
+/*************************************************************************************/
+
+// Trains the classifier using the dataset 'd', where 'eta' is the learning
+// rate and 'epochs' is the number of iterations
+void LogisticRegressionClassifier::train(const DataSet& d, ld eta, ld threshold, ll epochs) {
+  bool use_epochs = (threshold < 0);
+  ll dsize = d.instances.size(), num_features = d.instances[0].getNumRows();
+  Matrix w(num_features + 1, 1), grad(num_features + 1, 1);
+  initialize_weights();
+
+  vector<Matrix> transf_inst(dsize);
+  for (ll i = 0; i < dsize; i++) {
+    transf_inst[i] = transform(d.instances[i]);
+  }
+
+  if (use_epochs) {
+    while (epochs--) {
+      grad = {};
+      Matrix wt = w.transpose();
+      for (ll i = 0; i < dsize; i++) {
+        grad += (sigmoid(wt * transf_inst[i] + 0) - d.target_class[i]) * transf_inst[i];
+      }
+      w -= eta * grad;
+    } 
+  } else {
+    ld err, new_err;
+    err = error(w.transpose(), d);
+    new_err = err + threshold + 1;
+    while (fabs(new_err - err) > threshold) {
+      err = new_err;
+      grad = {};
+      Matrix wt = w.transpose();
+      for (ll i = 0; i < dsize; i++) {
+        grad += (sigmoid(wt * transf_inst[i] + 0) - d.target_class[i]) * transf_inst[i];
+      }
+      w -= eta * grad;
+      new_err = error(w.transpose(), d);
+    }
+  }
+
+  w_transpose = w.transpose();
+}
+
+// Error function
+ld LogisticRegressionClassifier::error(const Matrix& w_transpose, const DataSet& d) {
+  ll dsize = d.instances.size();
+   vector<Matrix> transf_inst(dsize);
+  for (ll i = 0; i < dsize; i++) {
+    transf_inst[i] = transform(d.instances[i]);
+  }
+  
+  ld ans = 0;
+  for (ll i = 0; i < dsize; i++) {
+    ld yn = sigmoid(w_transpose * transf_inst[i] + 0);
+    ans += d.target_class[i] ? log(yn) : log(1 - yn);
+  }
+  return -ans;
+}
+
+// Classify the instance given by 'instance' using the classifier
+// This is used by 'test'
+bool LogisticRegressionClassifier::classify(const Matrix& instance) {
+  return sigmoid(w_transpose * transform(instance) + 0) >= 0.5;
+}
+
+// Appends an x0=1 to 'instance' and returns the new matrix 
+Matrix LogisticRegressionClassifier::transform(const Matrix& instance) {
+  Matrix ans = instance;
+  ans.addRow(0, 1);
+  return ans;
+}
+
+// Assigns random integers to the elements of matrix 'w_transpose'
+void LogisticRegressionClassifier::initialize_weights() {
+  // Assumes 'w_transpose' is a column matrix
+  ll nrows = w_transpose.getNumRows();
+  default_random_engine gen;
+  normal_distribution<ld> dist(0, 1 / sqrt(nrows - 1));
+  for (ll i = 0; i < nrows; i++) {
+      w_transpose[i][0] = dist(gen);
+  }
+}
+
+// main.cpp
+#include <bits/stdc++.h>
+#include "classifiers.h"
+#include "utilities.h"
+
+using namespace std;
+
+typedef long long ll;
+typedef long double ld;
+
+int main() {
+  // Load the datasets
+  DataSet train_data("data/train.txt");
+  DataSet test_data("data/test.txt");
+  
+  cout << "Fisher Discriminant Classifier\n";
+  cout << "`````````````````````````````\n";
+  DiscriminantClassifier dc;
+  dc.run();
+  cout << "\n";
+
+  cout << "Probabilistic Generative Classifier\n";
+  cout << "``````````````````````````````````\n";
+  ProbabilisticGenerativeClassifier pgc;
+  pgc.train(train_data);
+  Stats pgc_stats = pgc.test(test_data);
+  cout << pgc_stats << "\n";
+
+  cout << "Logistic Regression Classifier\n";
+  cout << "`````````````````````````````\n";
+  LogisticRegressionClassifier lrc;
+  lrc.train(train_data, 0.0015, -1, 15000);
+  // lrc.train(train_data, 0.01, 1e-5, -1);
+  Stats lrc_stats = lrc.test(test_data);
+  cout << lrc_stats;
+
+  return 0;
+}
+
+// utilities.cpp
+#include <bits/stdc++.h>
+#include "utilities.h"
+
+using namespace std;
+
+typedef long double ld;
+typedef long long ll;
+
+// Default constructor
+Matrix::Matrix() {
+  data.resize(1);
+  data[0].resize(1);
+  nrows = 1; ncols = 1;
+}
+
+// Constructs a matrix with dimensions ('nrows', 'ncols')
+Matrix::Matrix(ll nrows, ll ncols) {
+  if (nrows == 0 || ncols == 0) {
+    cerr << "Trying to create matrix of dimension (" << nrows << ", " << ncols;
+    cerr << "): Neither dimension is allowed be of size 0\n";
+    exit(0);
+  }
+  data.resize(nrows);
+  for (ll i = 0; i < nrows; i++) {
+    data[i].resize(ncols);
+  }
+  this->nrows = nrows;
+  this->ncols = ncols;
+}
+
+// Copy constructor
+Matrix::Matrix(const Matrix& m) {
+  data = m.data;
+  nrows = m.nrows;
+  ncols = m.ncols;
+}
+
+// Allows access to individual elements
+vector<ld>& Matrix::operator[](ll row) {
+  return data[row];
+}
+
+// Assigns the matrix from another
+Matrix& Matrix::operator=(const Matrix& m) {
+  data = m.data;
+  nrows = m.nrows;
+  ncols = m.ncols;
+  return *this;
+}
+
+// Allows assignments of the form m = {1, 2, 3, 4}
+Matrix& Matrix::operator=(const initializer_list<ld>& l) {
+  if (l.size() == 0) {
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = 0;
+      }
+    }
+  } else if (l.size() == 1) {
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = *l.begin();
+      }
+    }
+  } else if (nrows * ncols != static_cast<ll>(l.size())) {
+    cerr << "Dimension mismatch: " << nrows * ncols << " != " << l.size() << "\n";
+    exit(0);
+  } else {
+    initializer_list<ld>::iterator it = l.begin();
+    for (ll i = 0; i < nrows; i++) {
+      for (ll j = 0; j < ncols; j++) {
+        data[i][j] = *(it++);
+      }
+    }
+  }
+  return *this;
+}
+
+// Addition assignment with a matrix 
+Matrix& Matrix::operator+=(const Matrix& m) {
+  *this = *this + m;
+  return *this;
+}
+
+// Subtraction assignment with a matrix 
+Matrix& Matrix::operator-=(const Matrix& m) {
+  *this = *this - m;
+  return *this;
+}
+
+// Multiplication assignment with a matrix 
+Matrix& Matrix::operator*=(const Matrix& m) {
+  *this = *this * m;
+  return *this;
+}
+
+// Multiplication assignment with a number 
+Matrix& Matrix::operator*=(ld a) {
+  *this = *this * a;
+  return *this;
+}
+
+// Division assignment with a number
+Matrix& Matrix::operator/=(ld a) {
+  *this = *this / a;
+  return *this;
+}
+
+// Compute norm of the row or column matrix
+ld Matrix::norm() {
+  if (nrows > 1 && ncols > 1) {
+    cerr << "Dimension error (" << nrows << ", " << ncols << "): ";
+    cerr << "norm() can be computed only on a row or column matrix\n";
+    exit(0);
+  }
+  ld ans = 0;
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      ans += data[i][j] * data[i][j];
+    }
+  }
+  return sqrt(ans);
+}
+  
+// Returns transpose of the matrix
+Matrix Matrix::transpose() {
+  Matrix ans(ncols, nrows);
+    for (ll i = 0; i < ans.nrows; i++) {
+      for (ll j = 0; j < ans.ncols; j++) {
+        ans.data[i][j] = data[j][i];
+      }
+    }
+    return ans;
+}
+
+// Returns a matrix containing column means
+Matrix Matrix::mean() {
+  ld sum;
+  Matrix ans(1, ncols);
+  for (ll j = 0; j < ans.ncols; j++) {
+  sum = 0;
+    for (ll i = 0; i < nrows; i++) {
+      sum += data[i][j];
+    }
+    ans.data[0][j] = sum/nrows;
+  }
+  return ans;
+}
+
+// Sets all elements to 1
+Matrix Matrix::initializer() {
+  Matrix ans(nrows, ncols);
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      data[i][j]  = 1;
+    }
+  }
+  return ans;
+}
+
+// Returns the determinant of the matrix
+ld Matrix::determinant() {
+  if (nrows != ncols) {
+    cerr << "Dimension error (" << nrows << ", " << ncols << "): ";
+    cerr << "Determinant can be computed only for a square matrix";
+    exit(0);
+  }
+  vector<bool> row_mask(nrows, true), col_mask(nrows, true);
+  return determinant(row_mask, col_mask);
+}
+
+// Returns the inverse of the matrix
+Matrix Matrix::inverse() {
+  vector<bool> row_mask(nrows, true), col_mask(nrows, true);
+  ld det = this->determinant(row_mask, col_mask);
+  if (nrows != ncols) {
+    cerr << "Dimension error (" << nrows << ", " << ncols << "): ";
+    cerr << "Inverse can be computed only for a square matrix";
+    exit(0);
+  } else if (det == 0) {
+    cerr << "Error: Matrix is non-invertible (determinant is 0)\n";
+    exit(0);
+  }
+
+  Matrix ans(nrows, nrows);
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      // find cofactor of (j, i)
+      row_mask[j] = false; col_mask[i] = false;
+      ans.data[i][j] = ((i + j) % 2 ? -1 : 1) * determinant(row_mask, col_mask);
+      row_mask[j] = true; col_mask[i] = true;
+    }
+  }
+  return ans / det;
+}
+
+// Append a row before row with index 'before' and set all its elements
+// to 'fill_val'
+void Matrix::addRow(ll before, ll fill_val) {
+  data.insert(data.begin() + before, vector<ld>(ncols, fill_val));
+  ++nrows;
+}
+
+// Returns the number of rows
+ll Matrix::getNumRows() const {
+  return nrows;
+}
+
+// Returns the number of columns
+ll Matrix::getNumCols() const {
+  return ncols;
+}
+
+// Returns a matrix representing the sum of two matrices
+Matrix operator+(const Matrix& m1, const Matrix& m2) {
+  if (m1.nrows != m2.nrows || m1.ncols != m2.ncols) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") + ";
+    cerr << "(" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix ans(m1.nrows, m1.ncols);
+  for (ll i = 0; i < ans.nrows; i++) {
+    for (ll j = 0; j < ans.ncols; j++) {
+      ans.data[i][j] = m1.data[i][j] + m2.data[i][j];
+    }
+  }
+  return ans;
+}
+
+// Returns a matrix representing the difference of two matrices
+Matrix operator-(const Matrix& m1, const Matrix& m2) {
+  if (m1.nrows != m2.nrows || m1.ncols != m2.ncols) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") + ";
+    cerr << "(" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix ans(m1.nrows, m1.ncols);
+  for (ll i = 0; i < ans.nrows; i++) {
+    for (ll j = 0; j < ans.ncols; j++) {
+      ans.data[i][j] = m1.data[i][j] - m2.data[i][j];
+    }
+  }
+  return ans;
+}
+
+// Returns a matrix representing the product of two matrices
+Matrix operator*(const Matrix& m1, const Matrix& m2) {
+  if (m1.ncols != m2.nrows) {
+    cerr << "Dimension mismatch: ";
+    cerr << "(" << m1.nrows << ", " << m1.ncols << ") * ";
+    cerr << "(" << m2.nrows << ", " << m2.ncols << ")\n";
+    exit(0);
+  }
+  Matrix ans(m1.nrows, m2.ncols);
+  for (ll i = 0; i < ans.nrows; i++) {
+    for (ll j = 0; j < ans.ncols; j++) {
+      ans.data[i][j] = 0;
+      for (ll k = 0; k < m1.ncols; k++) {
+        ans.data[i][j] += m1.data[i][k] * m2.data[k][j];
+      }
+    }
+  }
+  return ans;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+// and the matrix
+ld operator+(const Matrix& m, ld num) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'matrix' + 'number' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return m.data[0][0] + num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+// and the matrix
+ld operator+(ld num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' + 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return num + m.data[0][0];
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+// and the matrix
+ld operator-(const Matrix& m, ld num) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'matrix' - 'number' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return m.data[0][0] - num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+// and the matrix
+ld operator-(ld num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' - 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  return num - m.data[0][0];
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+// and the matrix
+ld& operator+=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' += 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num += m.data[0][0];
+  return num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the difference of the
+// number and the matrix
+ld& operator-=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' -= 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num -= m.data[0][0];
+  return num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the product of the
+// number and the matrix
+ld& operator*=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' *= 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num *= m.data[0][0];
+  return num;
+}
+
+// Applicable when 'm' is (1, 1) matrix. Returns the division of the
+// number and the matrix
+ld& operator/=(ld& num, const Matrix& m) {
+  if (m.nrows != 1 || m.ncols != 1) {
+    cerr << "Error: Attempting 'number' /= 'matrix' when dimensions of matrix are (";
+    cerr << m.nrows << ", " << m.ncols << ")\n";
+    exit(0);
+  }
+  num /= m.data[0][0];
+  return num;
+}
+
+// Returns a matrix which is the scalar multiplication of 'm' with 'num'
+Matrix operator*(const Matrix& m, ld num) {
+  Matrix ans(m);
+  ans.element_wise_multiply(num);
+  return ans;
+}
+
+// Returns a matrix which is the scalar multiplication of 'm' with 'num'
+Matrix operator*(ld num, const Matrix& m) {
+  Matrix ans(m);
+  ans.element_wise_multiply(num);
+  return ans;
+}
+
+// Returns a matrix which is the division of 'm' with 'num'
+Matrix operator/(const Matrix& m, ld num) {
+  Matrix ans(m);
+  ans.element_wise_divide(num);
+  return ans;
+}
+
+// Used to print the matrix
+std::ostream& operator<<(std::ostream& out, const Matrix& m) {
+  for (ll i = 0; i < m.nrows; i++) {
+    for (ll j = 0; j < m.ncols; j++) {
+      out << m.data[i][j] << " ";
+    }
+    out << "\n";
+  }
+  return out;
+}
+
+// Computes the elements of the submatrix defined by 'row_mask' and 
+// 'col_mask'
+ld Matrix::determinant(vector<bool>& row_mask, vector<bool>& col_mask) {
+  ll r = 0, c = 0, nr = 0, nc = 0;
+  for (size_t i = 0; i < row_mask.size(); i++) {
+    if (row_mask[i]) {
+      r = i;
+      ++nr;
+    } 
+  }
+  for (size_t i = 0; i < col_mask.size(); i++) {
+    if (col_mask[i]) {
+      c = i;
+      ++nc;
+    } 
+  }
+
+  if (nr == 0 || nc == 0) {
+    return 1;
+  } else if (nr == 1 && nc == 1) {
+    return data[r][c];
+  } else {
+    ll r = 0;
+    while (!row_mask[r++]);
+    --r;
+    row_mask[r] = false;
+
+    int sign = 1;
+    ld ans = 0;
+    for (ll i = 0; i < ncols; i++) {
+      if (col_mask[i]) {
+        col_mask[i] = false;
+        ans += sign * data[r][i] * determinant(row_mask, col_mask);
+        sign *= -1;
+        col_mask[i] = true;
+      }
+    }
+    row_mask[r] = true;
+    return ans;
+  }
+}
+
+// Multiplies each element of the matrix with 'num'
+void Matrix::element_wise_multiply(ld num) {
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      data[i][j] *= num;
+    }
+  }
+}
+
+// Divides each element of the matrix with 'num'
+void Matrix::element_wise_divide(ld num) {
+  for (ll i = 0; i < nrows; i++) {
+    for (ll j = 0; j < ncols; j++) {
+      data[i][j] /= num;
+    }
+  }
+}
+
+// 'file' is the path to the file from where the dataset
+// needs to be fetched
+DataSet::DataSet(const string& file) {
+  int isizecol = 4, row = 0, col;
+  num_pos_examples = 0;
+  num_neg_examples = 0;
+  ld i;
+  string line;
+  ifstream myfile (file);
+  if (myfile.is_open()) {
+    while (getline (myfile,line)) {
+      instances.push_back(Matrix(isizecol, 1));
+      std::stringstream ss(line);
+      col = 0;
+      while (ss >> i) {
+        if (col < isizecol) {
+          instances[row][col][0] = i;
+        } else {
+          target_class.push_back(i);
+          if (i) {
+            ++num_pos_examples;
+          } else {
+            ++num_neg_examples;
+          }
+          break;
+        }
+        if (ss.peek() == ',' ) {
+          ss.ignore();
+          col++;
+        }
+      }
+      row++;
+    }
+    myfile.close();
+  } else {
+    cerr << "Can't open file\n"; 
+    exit(0);
+  }
+}
+
+// Prints the dataset
+void DataSet::print() {
+  for (size_t i = 0; i < instances.size(); i++) {
+    for (ll j = 0; j < instances[i].getNumRows(); j++) {
+      cout << instances[i][j][0] << " ";
+    }
+    cout << target_class[i] << "\n";
+  }
+}
+
+// 'tp', 'tn', 'fp', 'fn' represents the number of true positives,
+// true negatives, false positives, false negatives respectively 
+Stats::Stats(ll tp, ll tn, ll fp, ll fn) {
+  this->tp = tp; this->tn = tn;
+  this->fp = fp; this->fn = fn;
+  f_measure = static_cast<ld>(2 * tp) / (2 * tp + fp + fn); 
+  accuracy = static_cast<ld>(tp + tn) / (tp + tn + fp + fn);
+  precision = static_cast<ld>(tp) / (tp + fp);
+  recall = static_cast<ld>(tp) / (tp + fn);
+}
+
+// Prints the statistics
+ostream& operator<<(ostream& out, const Stats& s) {
+  out << "Accuracy: " << s.accuracy << "\n";
+  out << "Recall: " << s.recall << "\n";
+  out << "Precision: " << s.precision << "\n\n";
+  // out << "F Measure: " << s.f_measure << "\n\n";
+  out << "Confusion Matrix\n";
+  out << s.tn << " " << s.fp << "\n" << s.fn << " " << s.tp << "\n";
+  return out;
+}
+
+// classifiers.h
+#ifndef CLASSIFIERS_H_
+#define CLASSIFIERS_H_
+
+#include <bits/stdc++.h>
+#include "utilities.h"
+
+using namespace std;
+
+typedef long double ld;
+typedef long long ll;
+
+class Classifier {
+public:
+  // Tests a classifier on the dataset 'd'
+  Stats test(const DataSet& d);
+protected:
+  // Classify the instance given by 'instance' using the classifier
+  // This is used by 'test'
+  virtual bool classify(const Matrix& instance) = 0;
+
+  // Returns the sigmoid of 'x'
+  ld sigmoid(ld x);
+};
+
+class DiscriminantClassifier: public Classifier {
+public:
+  DiscriminantClassifier();
+  void run();
+private:
+  // Computes entropy
+  long double loga(long double d);
+
+  // Computes entropy
+  ld entropy(ld noof1, ld isizerow, ld position, ld count);
+
+  // Classify the instance given by 'instance' using the classifier
+  // This is used by 'test'
+  bool classify(const Matrix& instance);
+  ll N;
+}; 
+
+class ProbabilisticGenerativeClassifier: public Classifier {
+public:
+  // Trains the classifier using the dataset 'd'
+  void train(const DataSet& d);
+private:
+  // Classify the instance given by 'instance' using the classifier
+  // This is used by 'test'
+  bool classify(const Matrix& instance);
+  Matrix w_transpose;
+  ld w0;
+};
+
+class LogisticRegressionClassifier: public Classifier {
+public:
+  // Trains the classifier using the dataset 'd', where 'eta' is the learning
+  // rate and 'epochs' is the number of iterations
+  void train(const DataSet& d, ld eta, ld threshold, ll epochs);
+private:
+  // Error function
+  ld error(const Matrix& w_transpose, const DataSet& d);
+
+  // Classify the instance given by 'instance' using the classifier
+  // This is used by 'test'
+  bool classify(const Matrix& instance);
+
+  // Appends an x0=1 to 'instance' and returns the new matrix 
+  Matrix transform(const Matrix& instance);
+
+  // Assigns random integers to the elements of matrix 'w_transpose'
+  void initialize_weights();
+
+  Matrix w_transpose;
+};
+
+#endif
+
+// utilities.h
+#ifndef UTILITIES_H_
+#define UTILITIES_H_
+
+#include <bits/stdc++.h>
+
+using namespace std;
+
+typedef long double ld;
+typedef long long ll;
+
+class Matrix {
+public:
+  // Default constructor
+  Matrix();
+
+  // Constructs a matrix with dimensions ('nrows', 'ncols')
+  Matrix(ll nrows, ll ncols);
+
+  // Copy constructor
+  Matrix(const Matrix& m);
+
+  // Allows access to individual elements
+  vector<ld>& operator[](ll row);
+
+  // Assigns the matrix from another
+  Matrix& operator=(const Matrix& m);
+
+  // Allows assignments of the form m = {1, 2, 3, 4}
+  Matrix& operator=(const initializer_list<ld>& l);
+
+  // Addition assignment with a matrix 
+  Matrix& operator+=(const Matrix& m);
+
+  // Subtraction assignment with a matrix 
+  Matrix& operator-=(const Matrix& m);
+  
+  // Multiplication assignment with a matrix 
+  Matrix& operator*=(const Matrix& m);
+  
+  // Multiplication assignment with a number 
+  Matrix& operator*=(ld a);
+  
+  // Division assignment with a number
+  Matrix& operator/=(ld a);
+
+  // Compute norm of the row or column matrix
+  ld norm();
+
+  // Returns transpose of the matrix
+  Matrix transpose();
+
+  // Returns a matrix containing column means
+  Matrix mean();
+  
+  // Sets all elements to 1
+  Matrix initializer();
+
+  // Returns the determinant of the matrix
+  ld determinant();
+
+  // Returns the inverse of the matrix
+  Matrix inverse();
+  
+  // Append a row before row with index 'before' and set all its elements
+  // to 'fill_val'
+  void addRow(ll before, ll fill_val);
+
+  // Returns the number of rows
+  ll getNumRows() const;
+
+  // Returns the number of columns
+  ll getNumCols() const;
+  
+  // Returns a matrix representing the sum of two matrices
+  friend Matrix operator+(const Matrix& m1, const Matrix& m2);
+
+  // Returns a matrix representing the difference of two matrices
+  friend Matrix operator-(const Matrix& m1, const Matrix& m2);
+
+  // Returns a matrix representing the product of two matrices
+  friend Matrix operator*(const Matrix& m1, const Matrix& m2);
+
+  // Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+  // and the matrix
+  friend ld operator+(const Matrix& m, ld num);
+
+  // Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+  // and the matrix
+  friend ld operator+(ld num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+  // and the matrix
+  friend ld operator-(const Matrix& m, ld num);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the difference of the number
+  // and the matrix
+  friend ld operator-(ld num, const Matrix& m);
+
+  // Applicable when 'm' is (1, 1) matrix. Returns the sum of the number
+  // and the matrix
+  friend ld& operator+=(ld& num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the difference of the
+  // number and the matrix
+  friend ld& operator-=(ld& num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the product of the
+  // number and the matrix
+  friend ld& operator*=(ld& num, const Matrix& m);
+  
+  // Applicable when 'm' is (1, 1) matrix. Returns the division of the
+  // number and the matrix
+  friend ld& operator/=(ld& num, const Matrix& m);
+  
+
+  // Returns a matrix which is the scalar multiplication of 'm' with 'num'
+  friend Matrix operator*(const Matrix& m, ld num);
+
+  // Returns a matrix which is the scalar multiplication of 'm' with 'num'
+  friend Matrix operator*(ld num, const Matrix& m);
+  
+  // Returns a matrix which is the division of 'm' with 'num'
+  friend Matrix operator/(const Matrix& m, ld num);
+
+  // Used to print the matrix
+  friend ostream& operator<<(ostream &out, const Matrix& m);
+
+private:
+  // Computes the elements of the submatrix defined by 'row_mask' and 
+  // 'col_mask'
+  ld determinant(vector<bool>& row_mask, vector<bool>& col_mask);
+  
+  // Multiplies each element of the matrix with 'num'
+  void element_wise_multiply(ld num);
+
+  // Divides each element of the matrix with 'num'
+  void element_wise_divide(ld num);
+  
+  // Stores the elements of the matrix
+  vector<vector<ld>> data;
+  ll nrows;
+  ll ncols;
+};
+
+class DataSet {
+public:
+  // 'file' is the path to the file from where the dataset
+  // needs to be fetched
+  DataSet(const string& file);
+  
+  // Prints the dataset
+  void print();
+
+  // Stores the instances of dataset
+  vector<Matrix> instances;
+
+  // Stores the target class corresponding to each instance
+  vector<bool> target_class;
+  ll num_pos_examples, num_neg_examples;
+};
+
+class Stats {
+public:
+  // 'tp', 'tn', 'fp', 'fn' represents the number of true positives,
+  // true negatives, false positives, false negatives respectively 
+  Stats(ll tp, ll tn, ll fp, ll fn);
+
+  // Prints the statistics
+  friend ostream& operator<<(ostream& out, const Stats& s);
+private:
+  ll tp, tn, fp, fn;
+  ld precision, recall, accuracy, f_measure;
+};
+
+#endif
